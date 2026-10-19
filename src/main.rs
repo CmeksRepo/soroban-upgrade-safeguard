@@ -920,6 +920,12 @@ struct ExtractArgs {
     /// Omit interface scope information (the `scope` field) from the output.
     #[arg(long)]
     no_scope: bool,
+
+    /// Emit the JSON on a single line instead of pretty-printing it.
+    /// Convenient for piping into other tools or archiving as a single-line
+    /// entry.
+    #[arg(long)]
+    compact: bool,
 }
 
 /// `lockfile`: write a committed snapshot of one contract's exported interface.
@@ -1109,10 +1115,12 @@ fn run_extract(args: &ExtractArgs) -> Result<()> {
             object.remove("scope");
         }
     }
-    write_extract_output(
-        args.output.as_deref(),
-        &serde_json::to_string_pretty(&value)?,
-    )
+    let json = if args.compact {
+        serde_json::to_string(&value)?
+    } else {
+        serde_json::to_string_pretty(&value)?
+    };
+    write_extract_output(args.output.as_deref(), &json)
 }
 
 /// Print `content` to stdout, or write it atomically to `path` when given —
