@@ -30,6 +30,40 @@ A powerful CLI tool to analyze and validate Soroban smart contract upgrades on t
 cargo install --path .
 ```
 
+### Shell completions
+
+The hidden `completions <SHELL>` command writes a completion script to stdout.
+Supported shells are `bash`, `zsh`, `fish`, `elvish`, and `powershell`.
+
+For Bash, save the script and load it from `~/.bashrc`:
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+soroban-upgrade-safeguard completions bash > ~/.local/share/bash-completion/completions/soroban-upgrade-safeguard
+echo 'source ~/.local/share/bash-completion/completions/soroban-upgrade-safeguard' >> ~/.bashrc
+source ~/.bashrc
+```
+
+For Zsh, save the script in a completion directory:
+
+```zsh
+mkdir -p ~/.zsh/completions
+soroban-upgrade-safeguard completions zsh > ~/.zsh/completions/_soroban-upgrade-safeguard
+```
+
+Add the following to `~/.zshrc`, putting the `fpath` line before any existing
+`compinit` call. If completion is already initialized there, keep just one
+`compinit` call after this line:
+
+```zsh
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit
+compinit
+```
+
+Start a new Zsh session to load the completions. Regenerate the saved scripts
+after upgrading the CLI to include any new flags and subcommands.
+
 ## Usage
 
 Compare two WASM contract builds to see if the upgrade is safe:

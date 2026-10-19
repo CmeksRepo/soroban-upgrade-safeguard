@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
@@ -754,6 +754,13 @@ fn metadata_cache_config(args: &Args) -> soroban_upgrade_safeguard::metadata_cac
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Generate a shell completion script on stdout
+    #[command(hide = true)]
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     /// Dump a single contract's decoded spec as JSON
     Extract(ExtractArgs),
     /// Generate or update a committed interface lockfile from one WASM build
@@ -2004,6 +2011,16 @@ fn main() -> Result<()> {
     }
 
     match &args.command {
+        Some(Command::Completions { shell }) => {
+            let mut command = Args::command();
+            clap_complete::generate(
+                *shell,
+                &mut command,
+                "soroban-upgrade-safeguard",
+                &mut std::io::stdout(),
+            );
+            return Ok(());
+        }
         Some(Command::Extract(extract_args)) => return run_extract(extract_args),
         Some(Command::Lockfile(lockfile_args)) => return run_lockfile(lockfile_args),
         Some(Command::Render(render_args)) => return run_render(render_args),
