@@ -21,6 +21,7 @@ Every category that the comparison analysis may emit, grouped by domain, with it
 | `Struct Documentation Changed` | 🔵 Info | A struct's doc string changed. | No code changes required. Ensure documentation changes are aligned with the struct's intended usage. |
 | `Struct Added` | 🔵 Info | A new struct was added. | No action required. New structs can be safely integrated into storage layouts or interface parameters. |
 | `Struct Field Removed` | 🔴 Critical | A field was removed from a non-event struct. | This is a breaking change. Removing fields breaks serialized storage layouts. Restore the field or perform a state migration. |
+| `Struct Field Inserted` | 🔴 Critical | A new struct field was inserted ahead of existing fields. | This is a breaking change. Inserting fields shifts existing serialized positions. Append the field instead or migrate existing data. |
 | `Struct Field Reordered` | 🔴 Critical | Fields in a non-event struct were reordered (positional names differ). | This is a breaking change. Reordering fields breaks positional serialization layouts. Restore the original field order. |
 | `Struct Field Type Changed` | 🔴 Critical | A field type in a non-event struct changed (not a BytesN resize). | This is a breaking change. Changing field types breaks layout serialization. Revert the type change or migrate existing data. |
 | `Struct Field Added` | 🟡 Warning | A new field was appended to a struct. | Warning: Ensure existing storage entries are migrated or initialized with correct default values for the new field. |
