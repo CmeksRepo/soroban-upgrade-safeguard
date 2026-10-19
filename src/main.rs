@@ -373,6 +373,10 @@ enum RenderFormat {
     Text,
     /// Markdown document suitable for PR descriptions and comments.
     Markdown,
+    /// GitHub Actions workflow annotations (`::error::`, `::warning::`,
+    /// `::notice::`). Reuses the same renderer as `--format github-actions`
+    /// on the main comparison command.
+    GithubActions,
 }
 
 #[derive(Parser, Debug)]
@@ -901,6 +905,13 @@ struct LintArgs {
     #[arg(long, value_name = "N")]
     max_walk_depth: Option<usize>,
 
+    /// Destination path for the lint output. Defaults to stdout.
+    /// Written atomically (temp file + rename) and always overwrites an
+    /// existing file at this path. The exit code is unchanged: only the
+    /// destination of the rendered output changes.
+    #[arg(long, value_name = "PATH")]
+    output: Option<PathBuf>,
+
     #[arg(long)]
     no_color: bool,
 }
@@ -960,6 +971,43 @@ struct VerifyAttestationArgs {
 }
 
 /// `stream`: JSON Lines streaming batch mode.
+///
+/// Reads one JSON job per line from stdin and writes one JSON result per line
+/// to stdout. Diagnostics go to stderr. All schema versions are `1`.
+///
+/// # Job line (stdin)
+///
+/// ```json
+/// {"schema_version":1,"id":"job-42","old":{"local":"/path/to/old.wasm"},"new":{"local":"/path/to/new.wasm"},"overrides":{"strict":true}}
+/// ```
+///
+/// Required fields: `schema_version`, `id`, `old`, `new`.
+/// Optional `overrides`: `strict`, `explain`, `ascii`, `empirical`,
+/// `suppression_config`.
+///
+/// # Result line (stdout)
+///
+/// ```json
+/// {"schema_version":1,"id":"job-42","status":"success","report":{...},"elapsed_ms":123}
+/// ```
+///
+/// `status` values: `success` · `failure` · `duplicate` · `malformed`.
+/// `report` is present on `success`; `error` is present on `failure`,
+/// `duplicate`, and `malformed`.
+///
+/// # Input descriptors
+///
+/// Every `old` / `new` field is a single-key object that names the source:
+///
+/// | Key         | Example value                                            |
+/// |-------------|----------------------------------------------------------|
+/// | `local`     | `{"local": "/path/to/file.wasm"}`                        |
+/// | `rpc`       | `{"rpc": {"url": "...", "contract_id": "C..."}}`         |
+/// | `hash`      | `{"hash": {"path": "...", "sha256": "<hex>"}}`            |
+/// | `extracted` | `{"extracted": "/path/to/spec.json"}`                    |
+/// | `remote`    | `{"remote": "https://example.com/file.wasm#sha256=<hex>"}` |
+///
+/// For full wire-format documentation see the module comment in `src/jsonl.rs`.
 #[derive(ClapArgs, Debug)]
 struct StreamArgs {
     /// Maximum number of concurrent worker threads.
@@ -1035,6 +1083,12 @@ struct ExtractArgs {
     /// Omit interface scope information (the `scope` field) from the output.
     #[arg(long)]
     no_scope: bool,
+
+    /// Emit the JSON on a single line instead of pretty-printing it.
+    /// Convenient for piping into other tools or archiving as a single-line
+    /// entry.
+    #[arg(long)]
+    compact: bool,
 }
 
 /// `lockfile`: write a committed snapshot of one contract's exported interface.
@@ -1357,10 +1411,12 @@ fn run_extract(args: &ExtractArgs) -> Result<()> {
             object.remove("scope");
         }
     }
-    write_extract_output(
-        args.output.as_deref(),
-        &serde_json::to_string_pretty(&value)?,
-    )
+    let json = if args.compact {
+        serde_json::to_string(&value)?
+    } else {
+        serde_json::to_string_pretty(&value)?
+    };
+    write_extract_output(args.output.as_deref(), &json)
 }
 
 /// Print `content` to stdout, or write it atomically to `path` when given —
@@ -2070,12 +2126,24 @@ fn run_lint(args: &LintArgs) -> Result<()> {
 
     let report = lint::lint(&metadata.spec, &options);
 
-    match args.format {
-        LintOutputFormat::Text => print!("{}", report.render_text(args.explain)),
-        LintOutputFormat::Markdown => print!("{}", report.render_markdown(args.explain)),
+    let output_text = match args.format {
+        LintOutputFormat::Text => report.render_text(args.explain),
+        LintOutputFormat::Markdown => report.render_markdown(args.explain),
         LintOutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&report.to_json_value())?)
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&report.to_json_value())?
+            )
         }
+    };
+
+    match &args.output {
+        Some(path) => {
+            write_atomically(path, output_text.as_bytes()).with_context(|| {
+                format!("Failed to write lint output to '{}'.", path.display())
+            })?;
+        }
+        None => print!("{output_text}"),
     }
 
     if report.has_errors() {
@@ -2382,6 +2450,11 @@ fn run_render(args: &RenderArgs) -> Result<()> {
                     markdown
                 }
             );
+        }
+        RenderFormat::GithubActions => {
+            // Disable color: annotations must not contain ANSI escape codes.
+            colored::control::set_override(false);
+            print!("{}", report.to_github_actions());
         }
     }
 
