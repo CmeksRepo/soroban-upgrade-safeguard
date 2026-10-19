@@ -856,6 +856,43 @@ struct VerifyAttestationArgs {
 }
 
 /// `stream`: JSON Lines streaming batch mode.
+///
+/// Reads one JSON job per line from stdin and writes one JSON result per line
+/// to stdout. Diagnostics go to stderr. All schema versions are `1`.
+///
+/// # Job line (stdin)
+///
+/// ```json
+/// {"schema_version":1,"id":"job-42","old":{"local":"/path/to/old.wasm"},"new":{"local":"/path/to/new.wasm"},"overrides":{"strict":true}}
+/// ```
+///
+/// Required fields: `schema_version`, `id`, `old`, `new`.
+/// Optional `overrides`: `strict`, `explain`, `ascii`, `empirical`,
+/// `suppression_config`.
+///
+/// # Result line (stdout)
+///
+/// ```json
+/// {"schema_version":1,"id":"job-42","status":"success","report":{...},"elapsed_ms":123}
+/// ```
+///
+/// `status` values: `success` · `failure` · `duplicate` · `malformed`.
+/// `report` is present on `success`; `error` is present on `failure`,
+/// `duplicate`, and `malformed`.
+///
+/// # Input descriptors
+///
+/// Every `old` / `new` field is a single-key object that names the source:
+///
+/// | Key         | Example value                                            |
+/// |-------------|----------------------------------------------------------|
+/// | `local`     | `{"local": "/path/to/file.wasm"}`                        |
+/// | `rpc`       | `{"rpc": {"url": "...", "contract_id": "C..."}}`         |
+/// | `hash`      | `{"hash": {"path": "...", "sha256": "<hex>"}}`            |
+/// | `extracted` | `{"extracted": "/path/to/spec.json"}`                    |
+/// | `remote`    | `{"remote": "https://example.com/file.wasm#sha256=<hex>"}` |
+///
+/// For full wire-format documentation see the module comment in `src/jsonl.rs`.
 #[derive(ClapArgs, Debug)]
 struct StreamArgs {
     /// Maximum number of concurrent worker threads.
