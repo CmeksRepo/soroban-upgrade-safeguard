@@ -519,6 +519,7 @@ pub fn classify_finding_axes(
                     category,
                     "Struct Removed"
                         | "Struct Field Removed"
+                        | "Struct Field Inserted"
                         | "Struct Field Reordered"
                         | "Struct Field Type Changed"
                         | "Enum Removed"
@@ -1325,6 +1326,37 @@ fn check_struct_fields(
     let is_evt = is_event(name);
     let msg_prefix = if is_evt { "Event schema" } else { "Struct" };
 
+    let old_names: HashSet<_> = old_fields.iter().map(|field| &field.name).collect();
+    let append_start = new_fields
+        .iter()
+        .rposition(|field| old_names.contains(&field.name))
+        .map_or(0, |position| position + 1);
+    let inserted_positions: HashSet<_> = new_fields[..append_start]
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| !old_names.contains(&field.name))
+        .map(|(position, _)| position)
+        .collect();
+
+    for (position, field) in new_fields.iter().enumerate() {
+        if inserted_positions.contains(&position) {
+            report.findings.push(Finding {
+                axes: Vec::new(),
+                severity: Severity::Critical,
+                category: FindingCategory::StructFieldInserted.as_str().to_string(),
+                message: format!(
+                    "{} '{}': new field '{}' inserted at position {} (zero-based), ahead of existing fields. \
+                     Positional serialization breaks layout compatibility.",
+                    msg_prefix, name, field.name, position
+                ),
+                type_name: Some(name.to_string()),
+                target: Some(format!("{}.{}", name, field.name)),
+                change: None,
+                root_target: None,
+            });
+        }
+    }
+
     // Check for removed fields
     for old_field in old_fields {
         let old_name = old_field.name.to_string();
@@ -1350,8 +1382,13 @@ fn check_struct_fields(
         }
     }
 
-    // Check fields that exist in both versions, by position
-    for (i, (old_field, new_field)) in old_fields.iter().zip(new_fields.iter()).enumerate() {
+    // Ignore shifts caused by insertions while preserving genuine reorder and
+    // type-change checks on the remaining fields.
+    let aligned_new_fields = new_fields
+        .iter()
+        .enumerate()
+        .filter(|(position, _)| !inserted_positions.contains(position));
+    for (old_field, (i, new_field)) in old_fields.iter().zip(aligned_new_fields) {
         let old_name = old_field.name.to_string();
         let new_name = new_field.name.to_string();
 
@@ -1436,8 +1473,8 @@ fn check_struct_fields(
     }
 
     // Check for new fields appended at the end
-    if new_fields.len() > old_fields.len() {
-        for new_field in &new_fields[old_fields.len()..] {
+    for new_field in &new_fields[append_start..] {
+        if !old_names.contains(&new_field.name) {
             report.findings.push(Finding {
                 axes: Vec::new(),
                 severity: Severity::Warning,
@@ -2564,6 +2601,117 @@ mod tests {
             );
         }
         spec
+    }
+
+    #[test]
+    fn inserted_struct_field_produces_one_critical_finding() {
+        let old = spec_with_structs(vec![(
+            "Data",
+            vec![("first", ScSpecTypeDef::U32), ("last", ScSpecTypeDef::U64)],
+        )]);
+        for position in [0, 1] {
+            let mut fields = vec![
+                ("first", ScSpecTypeDef::U32),
+                ("last", ScSpecTypeDef::U64),
+            ];
+            fields.insert(position, ("inserted", ScSpecTypeDef::Bool));
+            let new = spec_with_structs(vec![("Data", fields)]);
+            let report = compare(&old, &new);
+
+            assert_eq!(report.findings.len(), 1, "{:#?}", report.findings);
+            let finding = &report.findings[0];
+            assert_eq!(finding.category, "Struct Field Inserted");
+            assert_eq!(finding.severity, Severity::Critical);
+            assert_eq!(finding.target.as_deref(), Some("Data.inserted"));
+            assert!(finding.message.contains(&format!("position {position}")));
+            assert!(finding.axes.contains(&CompatibilityAxis::StorageLayout));
+        }
+    }
+
+    #[test]
+    fn inserted_and_appended_struct_fields_are_distinguished() {
+        let old = spec_with_structs(vec![(
+            "Data",
+            vec![("first", ScSpecTypeDef::U32), ("last", ScSpecTypeDef::U64)],
+        )]);
+        let new = spec_with_structs(vec![(
+            "Data",
+            vec![
+                ("front", ScSpecTypeDef::Bool),
+                ("first", ScSpecTypeDef::U32),
+                ("middle", ScSpecTypeDef::I128),
+                ("last", ScSpecTypeDef::U64),
+                ("tail", ScSpecTypeDef::String),
+            ],
+        )]);
+        let report = compare(&old, &new);
+
+        assert_eq!(report.findings.len(), 3, "{:#?}", report.findings);
+        assert_eq!(report.critical_count(), 2);
+        assert_eq!(report.warning_count(), 1);
+        let tail = report.findings.iter()
+            .find(|f| f.target.as_deref() == Some("Data.tail"))
+            .unwrap();
+        assert_eq!(tail.category, "Struct Field Added");
+        assert_eq!(tail.severity, Severity::Warning);
+        assert!(tail.message.contains("appended"));
+    }
+
+    #[test]
+    fn appended_struct_field_remains_a_warning() {
+        let old = spec_with_structs(vec![("Data", vec![("first", ScSpecTypeDef::U32)])]);
+        let new = spec_with_structs(vec![(
+            "Data",
+            vec![("first", ScSpecTypeDef::U32), ("tail", ScSpecTypeDef::U64)],
+        )]);
+        let report = compare(&old, &new);
+
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].category, "Struct Field Added");
+        assert_eq!(report.findings[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn struct_reorder_remains_critical_with_or_without_insertion() {
+        let old = spec_with_structs(vec![(
+            "Data",
+            vec![("first", ScSpecTypeDef::U32), ("last", ScSpecTypeDef::U32)],
+        )]);
+        for insert in [false, true] {
+            let mut fields = vec![("last", ScSpecTypeDef::U32), ("first", ScSpecTypeDef::U32)];
+            if insert {
+                fields.insert(1, ("inserted", ScSpecTypeDef::Bool));
+            }
+            let new = spec_with_structs(vec![("Data", fields)]);
+            let report = compare(&old, &new);
+
+            assert_eq!(report.findings.len(), if insert { 3 } else { 2 });
+            assert_eq!(
+                report.findings.iter()
+                    .filter(|f| f.category == "Struct Field Reordered")
+                    .count(),
+                2
+            );
+            assert!(report.findings.iter().all(|f| f.severity == Severity::Critical));
+        }
+    }
+
+    #[test]
+    fn insertion_preserves_independent_field_type_changes() {
+        let old = spec_with_structs(vec![("Data", vec![("value", ScSpecTypeDef::U32)])]);
+        let new = spec_with_structs(vec![(
+            "Data",
+            vec![("inserted", ScSpecTypeDef::Bool), ("value", ScSpecTypeDef::U64)],
+        )]);
+        let report = compare(&old, &new);
+
+        assert_eq!(report.findings.len(), 2, "{:#?}", report.findings);
+        let changed = report.findings.iter()
+            .find(|f| f.category == "Struct Field Type Changed")
+            .unwrap();
+        assert_eq!(changed.target.as_deref(), Some("Data.value"));
+        assert_eq!(changed.severity, Severity::Critical);
+        assert!(changed.message.contains("position 1"));
     }
 
     /// Helper: create a UDT type reference.

@@ -26,6 +26,7 @@ pub enum FindingCategory {
     StructDocumentationChanged,
     StructAdded,
     StructFieldRemoved,
+    StructFieldInserted,
     StructFieldReordered,
     StructFieldTypeChanged,
     StructFieldAdded,
@@ -123,6 +124,7 @@ impl FindingCategory {
             FindingCategory::StructDocumentationChanged => "Struct Documentation Changed",
             FindingCategory::StructAdded => "Struct Added",
             FindingCategory::StructFieldRemoved => "Struct Field Removed",
+            FindingCategory::StructFieldInserted => "Struct Field Inserted",
             FindingCategory::StructFieldReordered => "Struct Field Reordered",
             FindingCategory::StructFieldTypeChanged => "Struct Field Type Changed",
             FindingCategory::StructFieldAdded => "Struct Field Added",
@@ -205,6 +207,7 @@ impl FindingCategory {
             FindingCategory::StructDocumentationChanged => Severity::Info,
             FindingCategory::StructAdded => Severity::Info,
             FindingCategory::StructFieldRemoved => Severity::Critical,
+            FindingCategory::StructFieldInserted => Severity::Critical,
             FindingCategory::StructFieldReordered => Severity::Critical,
             FindingCategory::StructFieldTypeChanged => Severity::Critical,
             FindingCategory::StructFieldAdded => Severity::Warning,
@@ -312,6 +315,9 @@ impl FindingCategory {
             }
             FindingCategory::StructFieldRemoved => {
                 "A field was removed from a non-event struct."
+            }
+            FindingCategory::StructFieldInserted => {
+                "A new struct field was inserted ahead of existing fields."
             }
             FindingCategory::StructFieldReordered => {
                 "Fields in a non-event struct were reordered (positional names differ)."
@@ -535,6 +541,9 @@ impl FindingCategory {
             FindingCategory::StructFieldRemoved => {
                 "This is a breaking change. Removing fields breaks serialized storage layouts. Restore the field or perform a state migration."
             }
+            FindingCategory::StructFieldInserted => {
+                "This is a breaking change. Inserting fields shifts existing serialized positions. Append the field instead or migrate existing data."
+            }
             FindingCategory::StructFieldReordered => {
                 "This is a breaking change. Reordering fields breaks positional serialization layouts. Restore the original field order."
             }
@@ -727,6 +736,7 @@ impl FindingCategory {
             FindingCategory::StructDocumentationChanged,
             FindingCategory::StructAdded,
             FindingCategory::StructFieldRemoved,
+            FindingCategory::StructFieldInserted,
             FindingCategory::StructFieldReordered,
             FindingCategory::StructFieldTypeChanged,
             FindingCategory::StructFieldAdded,

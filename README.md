@@ -117,6 +117,40 @@ from source, use:
 cargo install --path .
 ```
 
+### Shell completions
+
+The hidden `completions <SHELL>` command writes a completion script to stdout.
+Supported shells are `bash`, `zsh`, `fish`, `elvish`, and `powershell`.
+
+For Bash, save the script and load it from `~/.bashrc`:
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+soroban-upgrade-safeguard completions bash > ~/.local/share/bash-completion/completions/soroban-upgrade-safeguard
+echo 'source ~/.local/share/bash-completion/completions/soroban-upgrade-safeguard' >> ~/.bashrc
+source ~/.bashrc
+```
+
+For Zsh, save the script in a completion directory:
+
+```zsh
+mkdir -p ~/.zsh/completions
+soroban-upgrade-safeguard completions zsh > ~/.zsh/completions/_soroban-upgrade-safeguard
+```
+
+Add the following to `~/.zshrc`, putting the `fpath` line before any existing
+`compinit` call. If completion is already initialized there, keep just one
+`compinit` call after this line:
+
+```zsh
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit
+compinit
+```
+
+Start a new Zsh session to load the completions. Regenerate the saved scripts
+after upgrading the CLI to include any new flags and subcommands.
+
 ## Usage
 
 Compare two WASM contract builds to see if the upgrade is safe:
@@ -1341,7 +1375,7 @@ soroban-upgrade-safeguard ./wasm/v1.wasm ./wasm/v2.wasm \
 
 ### Quiet output
 
-`--quiet` suppresses everything the tool narrates *about* the run: the banner and
+`-q` / `--quiet` suppresses everything the tool narrates *about* the run: the banner and
 separator lines, the per-file loading and spec-summary lines, config-discovery
 notes, batch pair headers, and the `report written to <path>` confirmations.
 
@@ -1364,6 +1398,31 @@ Note that progress output already avoids stdout whenever stdout carries a
 machine-readable report — with `--format json` it is written to stderr instead.
 `--quiet` goes further and silences it on both streams, which is what you want
 when a CI log should contain the report and nothing else.
+
+### Minimum severity
+
+Use `--min-severity info|warning|critical` to filter findings in text reports.
+The default is `info`, which displays every finding. Summary counts, verdicts,
+and exit codes always reflect the complete analysis, even when findings are
+hidden. JSON, Markdown, and GitHub Actions output retain the full report.
+This also applies to text reports in batch mode and text report files.
+
+```bash
+soroban-upgrade-safeguard ./wasm/v1.wasm ./wasm/v2.wasm --min-severity critical
+```
+
+### Diagnostic logging
+
+Use `-v` / `--verbose` for decoded spec-entry and host-import counts, finding
+counts, and per-stage timings. Repeat it (`-vv` or `--verbose --verbose`) to also
+print WASM section IDs and sizes in bytes. Diagnostics go to stderr and leave
+the report content and exit code unchanged. `--quiet` takes precedence over
+verbosity and suppresses diagnostics as well as progress output.
+
+```bash
+soroban-upgrade-safeguard ./wasm/v1.wasm ./wasm/v2.wasm -v
+soroban-upgrade-safeguard ./wasm/v1.wasm ./wasm/v2.wasm -vv --format json
+```
 
 ### Watch mode
 

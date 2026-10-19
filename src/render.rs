@@ -480,6 +480,31 @@ impl RenderableReport {
         self.to_text_with_width(explain, None)
     }
 
+    /// Filter displayed text findings without changing counts or verdicts.
+    pub fn to_text_with_min_severity(
+        &self,
+        explain: bool,
+        width: Option<usize>,
+        minimum: &Severity,
+    ) -> String {
+        if *minimum == Severity::Info {
+            return self.to_text_with_width(explain, width);
+        }
+        let mut view = self.clone();
+        let visible = |finding: &ReportedFinding| match minimum {
+            Severity::Info => true,
+            Severity::Warning => finding.finding.severity != Severity::Info,
+            Severity::Critical => finding.finding.severity == Severity::Critical,
+        };
+        for findings in view.findings_by_category.values_mut() {
+            findings.retain(&visible);
+        }
+        for findings in view.findings_by_axis.values_mut() {
+            findings.retain(&visible);
+        }
+        view.to_text_with_width(explain, width)
+    }
+
     /// Render as plain text, word-wrapping each finding message to fit
     /// `width` columns when given. `None` renders exactly like [`Self::to_text`]
     /// — unwrapped, matching current behavior. The wrap is applied only to

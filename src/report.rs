@@ -2038,14 +2038,25 @@ impl SafetyReport {
     }
 
     pub fn generate_summary_text(&self, explain: bool) -> String {
-        self.to_renderable().to_text(explain)
+        self.generate_summary_text_with_min_severity(explain, None, &Severity::Info)
     }
 
     /// Like [`Self::generate_summary_text`], with finding messages
     /// word-wrapped to `width` columns when given. See
     /// [`crate::render::RenderableReport::to_text_with_width`].
     pub fn generate_summary_text_with_width(&self, explain: bool, width: Option<usize>) -> String {
-        self.to_renderable().to_text_with_width(explain, width)
+        self.generate_summary_text_with_min_severity(explain, width, &Severity::Info)
+    }
+
+    /// Render findings at or above `minimum`, keeping full counts and verdicts.
+    pub fn generate_summary_text_with_min_severity(
+        &self,
+        explain: bool,
+        width: Option<usize>,
+        minimum: &Severity,
+    ) -> String {
+        self.to_renderable()
+            .to_text_with_min_severity(explain, width, minimum)
     }
 
     pub fn generate_summary_markdown(&self) -> String {

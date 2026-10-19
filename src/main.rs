@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{Context, Result};
-use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
@@ -41,6 +41,69 @@ mod watch;
 /// text. CI systems can set this once instead of repeating `--config` on
 /// every invocation; an explicit `--config` flag always takes precedence.
 const CONFIG_PATH_ENV_VAR: &str = "SOROBAN_SAFEGUARD_CONFIG";
+
+/// Keep narration separate from reports, and diagnostics on stderr.
+#[derive(Clone, Copy)]
+struct DiagnosticLog {
+    quiet: bool,
+    verbosity: u8,
+    progress_to_stderr: bool,
+}
+
+impl DiagnosticLog {
+    fn new(args: &Args, progress_to_stderr: bool) -> Self {
+        Self {
+            quiet: args.quiet,
+            verbosity: args.verbose,
+            progress_to_stderr,
+        }
+    }
+
+    fn progress(&self, line: impl std::fmt::Display) {
+        if !self.quiet {
+            if self.progress_to_stderr {
+                eprintln!("{line}");
+            } else {
+                println!("{line}");
+            }
+        }
+    }
+
+    fn diagnostic(&self, level: u8, message: impl std::fmt::Display) {
+        if !self.quiet && self.verbosity >= level {
+            eprintln!("[debug] {message}");
+        }
+    }
+
+    fn timing(&self, stage: &str, start: std::time::Instant) {
+        self.diagnostic(
+            1,
+            format_args!("{stage}: {:.3} ms", start.elapsed().as_secs_f64() * 1000.0),
+        );
+    }
+
+    fn sections(&self, label: &str, bytes: &[u8]) {
+        if self.quiet || self.verbosity < 2 {
+            return;
+        }
+        for payload in wasmparser::Parser::new(0).parse_all(bytes) {
+            match payload {
+                Ok(payload) => {
+                    if let Some((id, range)) = payload.as_section() {
+                        self.diagnostic(
+                            2,
+                            format_args!("{label} section {id}: {} bytes", range.len()),
+                        );
+                    }
+                }
+                Err(error) => {
+                    self.diagnostic(2, format_args!("{label} section scan: {error}"));
+                    break;
+                }
+            }
+        }
+    }
+}
 
 /// Where a resolved suppression config path came from, for diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,6 +246,24 @@ fn load_suppressions(
         return Ok((config, Some((path, ConfigSource::AncestorSearch))));
     }
     Ok((SuppressionConfig::default(), None))
+}
+
+/// CLI values kept separate from the shared report severity type.
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum MinimumSeverity {
+    Info,
+    Warning,
+    Critical,
+}
+
+impl MinimumSeverity {
+    fn as_severity(&self) -> &diff::Severity {
+        match self {
+            Self::Info => &diff::Severity::Info,
+            Self::Warning => &diff::Severity::Warning,
+            Self::Critical => &diff::Severity::Critical,
+        }
+    }
 }
 
 /// Output format for the safety report.
@@ -419,6 +500,10 @@ struct Args {
     #[arg(long, value_enum, ignore_case = true)]
     format: Option<OutputFormat>,
 
+    /// Minimum severity of displayed text findings; counts and exit codes remain unchanged.
+    #[arg(long, value_enum, default_value = "info")]
+    min_severity: MinimumSeverity,
+
     /// Output specification(s) in FORMAT:PATH format (e.g. json:report.json),
     /// or a bare path whose format comes from --format. Can be repeated.
     #[arg(long, value_name = "FORMAT:PATH|PATH", num_args = 1)]
@@ -540,8 +625,12 @@ struct Args {
     width: Option<usize>,
 
     /// Suppress decorative and progress output; the report and exit code are unchanged.
-    #[arg(long)]
+    #[arg(short = 'q', long)]
     quiet: bool,
+
+    /// Add diagnostic counts and stage timings; repeat for WASM section sizes.
+    #[arg(short = 'v', long, action = clap::ArgAction::Count)]
+    verbose: u8,
 
     /// Control when ANSI color is used. --no-color overrides this option.
     #[arg(long, value_enum, default_value_t = ColorMode::Auto)]
@@ -833,6 +922,13 @@ fn metadata_cache_config(
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Generate a shell completion script on stdout
+    #[command(hide = true)]
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     /// Dump a single contract's decoded spec as JSON
     Extract(ExtractArgs),
     /// Generate or update a committed interface lockfile from one WASM build
@@ -2673,6 +2769,7 @@ fn main() -> Result<()> {
     let metrics = soroban_upgrade_safeguard::metrics::MetricsRegistry::new();
     let run_start = std::time::Instant::now();
     let args = Args::parse();
+    let log = DiagnosticLog::new(&args, false);
 
     if args.clear_remote_cache {
         let dir = args
@@ -2681,9 +2778,10 @@ fn main() -> Result<()> {
             .unwrap_or_else(remote::default_cache_dir);
         remote::clear_cache(&dir)
             .with_context(|| format!("Failed to clear remote cache at '{}'", dir.display()))?;
-        if !args.quiet {
-            println!("Cleared remote artifact cache at '{}'", dir.display());
-        }
+        log.progress(format_args!(
+            "Cleared remote artifact cache at '{}'",
+            dir.display()
+        ));
         return Ok(());
     }
 
@@ -2694,9 +2792,10 @@ fn main() -> Result<()> {
             .unwrap_or_else(oci::default_cache_dir);
         oci::clear_cache(&dir)
             .with_context(|| format!("Failed to clear OCI cache at '{}'", dir.display()))?;
-        if !args.quiet {
-            println!("Cleared OCI artifact cache at '{}'", dir.display());
-        }
+        log.progress(format_args!(
+            "Cleared OCI artifact cache at '{}'",
+            dir.display()
+        ));
         return Ok(());
     }
 
@@ -2707,9 +2806,10 @@ fn main() -> Result<()> {
             .unwrap_or_else(soroban_upgrade_safeguard::metadata_cache::default_cache_dir);
         soroban_upgrade_safeguard::metadata_cache::clear_cache(&dir)
             .with_context(|| format!("Failed to clear metadata cache at '{}'", dir.display()))?;
-        if !args.quiet {
-            println!("Cleared parsed-metadata cache at '{}'", dir.display());
-        }
+        log.progress(format_args!(
+            "Cleared parsed-metadata cache at '{}'",
+            dir.display()
+        ));
         return Ok(());
     }
 
@@ -2723,6 +2823,16 @@ fn main() -> Result<()> {
     }
 
     match &args.command {
+        Some(Command::Completions { shell }) => {
+            let mut command = Args::command();
+            clap_complete::generate(
+                *shell,
+                &mut command,
+                "soroban-upgrade-safeguard",
+                &mut std::io::stdout(),
+            );
+            return Ok(());
+        }
         Some(Command::Extract(extract_args)) => return run_extract(extract_args),
         Some(Command::Lockfile(lockfile_args)) => return run_lockfile(lockfile_args),
         Some(Command::Render(render_args)) => return run_render(render_args),
@@ -2865,16 +2975,8 @@ fn main() -> Result<()> {
             )
     });
     let clean_stdout = stdout_is_clean || has_non_stdout;
-    let progress = |line: String| {
-        if args.quiet {
-            return;
-        }
-        if clean_stdout {
-            eprintln!("{line}");
-        } else {
-            println!("{line}");
-        }
-    };
+    let log = DiagnosticLog::new(&args, clean_stdout);
+    let progress = |line: String| log.progress(line);
 
     let (suppressions, config_source) = load_suppressions(
         args.no_config,
@@ -3167,6 +3269,7 @@ fn run_batch(args: &Args, outputs: &[OutputSpec], progress: &dyn Fn(String)) -> 
                 args.plain,
                 width,
                 args.redact_paths,
+                args.min_severity.as_severity(),
             )?;
             write_report_file(
                 output_dir,
@@ -3231,6 +3334,7 @@ fn run_batch(args: &Args, outputs: &[OutputSpec], progress: &dyn Fn(String)) -> 
         },
         outputs,
         progress,
+        args.min_severity.as_severity(),
     )?;
 
     Ok(overall_safe)
@@ -3453,6 +3557,8 @@ fn compare_batch_pair(
     config_cache: &mut HashMap<PathBuf, SuppressionConfig>,
     progress: &dyn Fn(String),
 ) -> BatchResult {
+    let log = DiagnosticLog::new(args, true);
+    let pair_start = std::time::Instant::now();
     let contract_name = pair.name.clone();
     let contract_id = pair.id.clone();
     let contract_labels = pair.labels.clone();
@@ -3506,8 +3612,12 @@ fn compare_batch_pair(
         ),
     ) {
         (Ok(old_wasm), Ok(new_wasm)) => {
+            log.timing("Loading batch pair inputs", pair_start);
+            let compare_start = std::time::Instant::now();
             match load_pair_storage_schemas(pair).and_then(|storage_schemas| {
                 if let Some(storage_schemas) = storage_schemas.as_ref() {
+                    log.sections("Old", &old_wasm.bytes);
+                    log.sections("New", &new_wasm.bytes);
                     let mut report = soroban_upgrade_safeguard::compare_wasm_bytes_with_options(
                         &old_wasm.bytes,
                         &new_wasm.bytes,
@@ -3548,10 +3658,12 @@ fn compare_batch_pair(
                             complexity_budget: None,
                         },
                         progress,
+                        &log,
                     )
                 }
             }) {
                 Ok(report) => {
+                    log.timing("Batch pair comparison", compare_start);
                     report.with_symlinks(old_wasm.symlink.clone(), new_wasm.symlink.clone())
                 }
                 Err(e) => {
@@ -3647,6 +3759,7 @@ fn render_pair_outputs(
         args.redact_paths,
         Some(&pair.name),
         progress,
+        args.min_severity.as_severity(),
     )?;
 
     if let Some(output_dir) = args.per_contract_output_dir.as_deref() {
@@ -3658,6 +3771,7 @@ fn render_pair_outputs(
             plain,
             width,
             args.redact_paths,
+            args.min_severity.as_severity(),
         )?;
         write_report_file(
             output_dir,
@@ -3822,6 +3936,7 @@ fn render_gap_outputs(
         args.redact_paths,
         Some(gap_name),
         progress,
+        args.min_severity.as_severity(),
     )?;
 
     if let Some(output_dir) = args.per_contract_output_dir.as_deref() {
@@ -3833,6 +3948,7 @@ fn render_gap_outputs(
             args.plain,
             width,
             args.redact_paths,
+            args.min_severity.as_severity(),
         )?;
         write_report_file(
             output_dir,
@@ -3957,6 +4073,7 @@ fn render_batch_summary(
     summary: &BatchSummary<'_>,
     outputs: &[OutputSpec],
     progress: &dyn Fn(String),
+    min_severity: &diff::Severity,
 ) -> Result<()> {
     let BatchSummary {
         results,
@@ -4183,7 +4300,11 @@ fn render_batch_summary(
                     if let BatchResult::Error { error, .. } = result {
                         text.push_str(&format!("Pair error: {}\n", error));
                     }
-                    let detail = report.generate_summary_text_with_width(false, width);
+                    let detail = report.generate_summary_text_with_min_severity(
+                        false,
+                        width,
+                        min_severity,
+                    );
                     text.push_str(&destyle_text(detail, ascii, plain));
                     text.push_str("========================================\n\n");
                 }
@@ -4374,6 +4495,9 @@ fn run_single(
     let suppressions: &SuppressionConfig = owned_suppressions.as_ref().unwrap_or(suppressions);
 
     let run_comparison = |progress: &dyn Fn(String)| -> Result<bool> {
+        let log = DiagnosticLog::new(args, true);
+        let cycle_start = std::time::Instant::now();
+        let load_start = std::time::Instant::now();
         progress("🔍 Soroban Upgrade Safeguard".to_string());
         progress("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string());
 
@@ -4460,7 +4584,10 @@ fn run_single(
                 "\n🔒 Checking exported interface against {}...",
                 lockfile_path.display()
             ));
-            soroban_upgrade_safeguard::compare_wasm_against_interface_lockfile(
+            log.timing("Loading inputs", load_start);
+            log.sections("New", &new.bytes);
+            let compare_start = std::time::Instant::now();
+            let report = soroban_upgrade_safeguard::compare_wasm_against_interface_lockfile(
                 &lockfile_json,
                 &new.bytes,
                 &soroban_upgrade_safeguard::CompareOptions {
@@ -4473,7 +4600,9 @@ fn run_single(
                     complexity_budget: None,
                 },
             )?
-            .with_symlinks(None, new.symlink.clone())
+            .with_symlinks(None, new.symlink.clone());
+            log.timing("Interface lockfile comparison", compare_start);
+            report
         } else {
             let old = if let Some(contract_id) = old_source {
                 let rpc_url = args.rpc_url.as_ref().unwrap();
@@ -4505,6 +4634,7 @@ fn run_single(
                 verify_expected_wasm_hash(expected, &old.sha256, &old.path)?;
             }
 
+            log.timing("Loading inputs", load_start);
             compare_contracts(
                 &ContractComparison {
                     old_bytes: &old.bytes,
@@ -4529,6 +4659,7 @@ fn run_single(
                     complexity_budget: None,
                 },
                 progress,
+                &log,
             )?
             .with_symlinks(old.symlink.clone(), new.symlink.clone())
         };
@@ -4569,6 +4700,7 @@ fn run_single(
             ));
         }
 
+        let render_start = std::time::Instant::now();
         render_to_outputs(
             &safety_report,
             outputs,
@@ -4579,7 +4711,10 @@ fn run_single(
             args.redact_paths,
             None,
             progress,
+            args.min_severity.as_severity(),
         )?;
+        log.timing("Rendering report", render_start);
+        log.timing("Comparison cycle", cycle_start);
 
         let is_safe = safety_report.is_safe();
         if !is_safe {
@@ -4717,9 +4852,12 @@ fn render_to_outputs(
     redact: bool,
     contract_name: Option<&str>,
     progress: &dyn Fn(String),
+    min_severity: &diff::Severity,
 ) -> Result<()> {
     for output in outputs {
-        let content = render_single(report, output.format, explain, ascii, plain, width, redact)?;
+        let content = render_single(
+            report, output.format, explain, ascii, plain, width, redact, min_severity,
+        )?;
         emit_output(output, &content)?;
 
         if let Some(ref path) = output.path {
@@ -4801,6 +4939,7 @@ fn destyle_text(text: String, ascii: bool, plain: bool) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_single(
     report: &report::SafetyReport,
     format: OutputFormat,
@@ -4809,11 +4948,12 @@ fn render_single(
     plain: bool,
     width: Option<usize>,
     redact: bool,
+    min_severity: &diff::Severity,
 ) -> Result<String> {
     // JSON carries the severity as a field rather than as a marker glyph, and
     // the GitHub Actions workflow-command syntax is already plain ASCII, so
     // `--ascii`/`--plain` only affect the human-readable formats. `width` is
-    // narrower still: it only ever reaches `to_text_with_width`
+    // narrower still: it only ever reaches `to_text_with_min_severity`
     // below, so JSON and Markdown output are structurally incapable of being
     // affected by it.
     let mut renderable = report.to_renderable();
@@ -4827,7 +4967,7 @@ fn render_single(
             Ok(destyle_text(markdown, ascii, plain))
         }
         OutputFormat::Text => {
-            let text = renderable.to_text_with_width(explain, width);
+            let text = renderable.to_text_with_min_severity(explain, width, min_severity);
             Ok(destyle_text(text, ascii, plain))
         }
         OutputFormat::GithubActions => Ok(render_github_actions(report)),
@@ -5011,14 +5151,15 @@ fn run_watch_mode(
             });
     }
 
-    eprintln!(
+    let log = DiagnosticLog::new(args, true);
+    log.progress(format_args!(
         "\n👀 Watch mode active (debounce: {debounce_ms}ms). Waiting for file changes... (Ctrl+C or SIGTERM to stop)\n"
-    );
+    ));
 
     let loop_result = (|| -> Result<()> {
         loop {
             if watch_shutdown_requested() {
-                eprintln!("\n🛑 SIGTERM received, shutting down watch mode...\n");
+                log.progress("\n🛑 SIGTERM received, shutting down watch mode...\n");
                 return Ok(());
             }
 
@@ -5039,7 +5180,7 @@ fn run_watch_mode(
                     }
 
                     if watch_shutdown_requested() {
-                        eprintln!("\n🛑 SIGTERM received, shutting down watch mode...\n");
+                        log.progress("\n🛑 SIGTERM received, shutting down watch mode...\n");
                         return Ok(());
                     }
 
@@ -5055,7 +5196,7 @@ fn run_watch_mode(
                                 break;
                             }
                             if watch_shutdown_requested() {
-                                eprintln!("\n🛑 SIGTERM received, shutting down watch mode...\n");
+                                log.progress("\n🛑 SIGTERM received, shutting down watch mode...\n");
                                 return Ok(());
                             }
                             if start.elapsed() > timeout {
@@ -5067,20 +5208,20 @@ fn run_watch_mode(
                     }
 
                     // Clear terminal
-                    print!("\x1B[2J\x1B[H");
+                    if !args.quiet {
+                        print!("\x1B[2J\x1B[H");
+                    }
 
-                    let progress = |line: String| {
-                        eprintln!("{line}");
-                    };
+                    let progress = |line: String| log.progress(line);
 
-                    eprintln!("🔄 Change detected, re-running comparison...\n");
+                    log.progress("🔄 Change detected, re-running comparison...\n");
 
                     match run_comparison(&progress) {
                         Ok(safe) => {
                             if safe {
-                                eprintln!("\n✅ Comparison passed");
+                                log.progress("\n✅ Comparison passed");
                             } else {
-                                eprintln!("\n❌ Comparison failed (breaking changes detected)");
+                                log.progress("\n❌ Comparison failed (breaking changes detected)");
                             }
                         }
                         Err(e) => {
@@ -5088,9 +5229,9 @@ fn run_watch_mode(
                         }
                     }
 
-                    eprintln!(
+                    log.progress(format_args!(
                     "\n👀 Watch mode active (debounce: {debounce_ms}ms). Waiting for file changes... (Ctrl+C or SIGTERM to stop)\n"
-                );
+                    ));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     // No event - if this is the first run, just continue
@@ -5363,6 +5504,7 @@ fn load_storage_schema(path: &Path) -> Result<soroban_upgrade_safeguard::Storage
 fn compare_contracts(
     comparison: &ContractComparison<'_>,
     progress: &dyn Fn(String),
+    log: &DiagnosticLog,
 ) -> Result<report::SafetyReport> {
     let ContractComparison {
         old_bytes,
@@ -5386,8 +5528,20 @@ fn compare_contracts(
         contract,
         complexity_budget,
     } = comparison;
+    log.sections("Old", old_bytes);
+    log.sections("New", new_bytes);
+    let parse_start = std::time::Instant::now();
     let old_meta = parser::extract_metadata(old_bytes)?;
     let old_spec = spec::ContractSpec::from_entries(&old_meta.spec);
+    log.diagnostic(
+        1,
+        format_args!(
+            "Old: {} spec entries, {} host imports",
+            old_meta.spec.len(),
+            old_meta.host_imports.len()
+        ),
+    );
+    log.timing("Parsing old contract", parse_start);
     progress(format!(
         "  {} {} ({} bytes)",
         "✅ Old:".green().bold(),
@@ -5400,8 +5554,18 @@ fn compare_contracts(
         format!("sha256: {}", loader::sha256_hex(old_bytes)).dimmed()
     ));
 
+    let parse_start = std::time::Instant::now();
     let new_meta = parser::extract_metadata(new_bytes)?;
     let new_spec = spec::ContractSpec::from_entries(&new_meta.spec);
+    log.diagnostic(
+        1,
+        format_args!(
+            "New: {} spec entries, {} host imports",
+            new_meta.spec.len(),
+            new_meta.host_imports.len()
+        ),
+    );
+    log.timing("Parsing new contract", parse_start);
     progress(format!(
         "  {} {} ({} bytes)",
         "✅ New:".green().bold(),
@@ -5418,6 +5582,7 @@ fn compare_contracts(
         "\n{}",
         "🔬 Analyzing structural compatibility...".cyan().bold()
     ));
+    let compare_start = std::time::Instant::now();
     let mut diff_report = diff::compare(&old_spec, &new_spec);
     diff::compare_env_metadata(
         old_meta.env_meta.as_ref(),
@@ -5436,7 +5601,16 @@ fn compare_contracts(
         &new_meta.runtime_surface,
         &mut diff_report,
     );
+    log.diagnostic(
+        1,
+        format_args!(
+            "Structural comparison: {} findings",
+            diff_report.findings.len()
+        ),
+    );
+    log.timing("Structural comparison", compare_start);
 
+    let report_start = std::time::Instant::now();
     let mut report = report::SafetyReport::with_suppressions_with_specs(
         &diff_report,
         suppressions,
@@ -5623,6 +5797,7 @@ fn compare_contracts(
         report.apply_lineage_report(&lineage_report, suppressions, *explain, *strict);
     }
 
+    log.timing("Building safety report", report_start);
     Ok(report)
 }
 
