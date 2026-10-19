@@ -790,6 +790,13 @@ struct LintArgs {
     #[arg(long, value_name = "N")]
     max_walk_depth: Option<usize>,
 
+    /// Destination path for the lint output. Defaults to stdout.
+    /// Written atomically (temp file + rename) and always overwrites an
+    /// existing file at this path. The exit code is unchanged: only the
+    /// destination of the rendered output changes.
+    #[arg(long, value_name = "PATH")]
+    output: Option<PathBuf>,
+
     #[arg(long)]
     no_color: bool,
 }
@@ -1415,12 +1422,24 @@ fn run_lint(args: &LintArgs) -> Result<()> {
 
     let report = lint::lint(&metadata.spec, &options);
 
-    match args.format {
-        LintOutputFormat::Text => print!("{}", report.render_text(args.explain)),
-        LintOutputFormat::Markdown => print!("{}", report.render_markdown(args.explain)),
+    let output_text = match args.format {
+        LintOutputFormat::Text => report.render_text(args.explain),
+        LintOutputFormat::Markdown => report.render_markdown(args.explain),
         LintOutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&report.to_json_value())?)
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&report.to_json_value())?
+            )
         }
+    };
+
+    match &args.output {
+        Some(path) => {
+            write_atomically(path, output_text.as_bytes()).with_context(|| {
+                format!("Failed to write lint output to '{}'.", path.display())
+            })?;
+        }
+        None => print!("{output_text}"),
     }
 
     if report.has_errors() {
