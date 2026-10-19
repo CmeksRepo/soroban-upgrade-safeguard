@@ -720,7 +720,7 @@ soroban-upgrade-safeguard ./wasm/v1.wasm ./wasm/v2.wasm \
 
 ### Quiet output
 
-`--quiet` suppresses everything the tool narrates *about* the run: the banner and
+`-q` / `--quiet` suppresses everything the tool narrates *about* the run: the banner and
 separator lines, the per-file loading and spec-summary lines, config-discovery
 notes, batch pair headers, and the `report written to <path>` confirmations.
 
@@ -743,6 +743,19 @@ Note that progress output already avoids stdout whenever stdout carries a
 machine-readable report — with `--format json` it is written to stderr instead.
 `--quiet` goes further and silences it on both streams, which is what you want
 when a CI log should contain the report and nothing else.
+
+### Diagnostic logging
+
+Use `-v` / `--verbose` for decoded spec-entry and host-import counts, finding
+counts, and per-stage timings. Repeat it (`-vv` or `--verbose --verbose`) to also
+print WASM section IDs and sizes in bytes. Diagnostics go to stderr and leave
+the report content and exit code unchanged. `--quiet` takes precedence over
+verbosity and suppresses diagnostics as well as progress output.
+
+```bash
+soroban-upgrade-safeguard ./wasm/v1.wasm ./wasm/v2.wasm -v
+soroban-upgrade-safeguard ./wasm/v1.wasm ./wasm/v2.wasm -vv --format json
+```
 
 ### Watch mode
 
