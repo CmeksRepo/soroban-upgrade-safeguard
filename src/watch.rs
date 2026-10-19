@@ -791,6 +791,7 @@ fn render_summary(
         },
         outputs,
         progress,
+        &args.min_severity,
     )?;
     Ok(())
 }

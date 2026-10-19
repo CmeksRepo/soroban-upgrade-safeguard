@@ -469,6 +469,10 @@ struct Args {
     #[arg(long, value_enum, ignore_case = true)]
     format: Option<OutputFormat>,
 
+    /// Minimum severity of displayed text findings; counts and exit codes remain unchanged.
+    #[arg(long, value_enum, default_value = "info")]
+    min_severity: diff::Severity,
+
     /// Output specification(s) in FORMAT:PATH format (e.g. json:report.json),
     /// or a bare path whose format comes from --format. Can be repeated.
     #[arg(long, value_name = "FORMAT:PATH|PATH", num_args = 1)]
@@ -2428,6 +2432,7 @@ fn run_batch(args: &Args, outputs: &[OutputSpec], progress: &dyn Fn(String)) -> 
                 args.plain,
                 width,
                 args.redact_paths,
+                &args.min_severity,
             )?;
             write_report_file(
                 output_dir,
@@ -2492,6 +2497,7 @@ fn run_batch(args: &Args, outputs: &[OutputSpec], progress: &dyn Fn(String)) -> 
         },
         outputs,
         progress,
+        &args.min_severity,
     )?;
 
     if !overall_safe {
@@ -2911,6 +2917,7 @@ fn render_pair_outputs(
         args.redact_paths,
         Some(&pair.name),
         progress,
+        &args.min_severity,
     )?;
 
     if let Some(output_dir) = args.per_contract_output_dir.as_deref() {
@@ -2922,6 +2929,7 @@ fn render_pair_outputs(
             plain,
             width,
             args.redact_paths,
+            &args.min_severity,
         )?;
         write_report_file(
             output_dir,
@@ -3080,6 +3088,7 @@ fn render_gap_outputs(
         args.redact_paths,
         Some(gap_name),
         progress,
+        &args.min_severity,
     )?;
 
     if let Some(output_dir) = args.per_contract_output_dir.as_deref() {
@@ -3091,6 +3100,7 @@ fn render_gap_outputs(
             args.plain,
             width,
             args.redact_paths,
+            &args.min_severity,
         )?;
         write_report_file(
             output_dir,
@@ -3215,6 +3225,7 @@ fn render_batch_summary(
     summary: &BatchSummary<'_>,
     outputs: &[OutputSpec],
     progress: &dyn Fn(String),
+    min_severity: &diff::Severity,
 ) -> Result<()> {
     let BatchSummary {
         results,
@@ -3441,7 +3452,11 @@ fn render_batch_summary(
                     if let BatchResult::Error { error, .. } = result {
                         text.push_str(&format!("Pair error: {}\n", error));
                     }
-                    let detail = report.generate_summary_text_with_width(false, width);
+                    let detail = report.generate_summary_text_with_min_severity(
+                        false,
+                        width,
+                        min_severity,
+                    );
                     text.push_str(&destyle_text(detail, ascii, plain));
                     text.push_str("========================================\n\n");
                 }
@@ -3747,6 +3762,7 @@ fn run_single(
             args.redact_paths,
             None,
             progress,
+            &args.min_severity,
         )?;
         log.timing("Rendering report", render_start);
         log.timing("Comparison cycle", cycle_start);
@@ -3884,9 +3900,12 @@ fn render_to_outputs(
     redact: bool,
     contract_name: Option<&str>,
     progress: &dyn Fn(String),
+    min_severity: &diff::Severity,
 ) -> Result<()> {
     for output in outputs {
-        let content = render_single(report, output.format, explain, ascii, plain, width, redact)?;
+        let content = render_single(
+            report, output.format, explain, ascii, plain, width, redact, min_severity,
+        )?;
         emit_output(output, &content)?;
 
         if let Some(ref path) = output.path {
@@ -3968,6 +3987,7 @@ fn destyle_text(text: String, ascii: bool, plain: bool) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_single(
     report: &report::SafetyReport,
     format: OutputFormat,
@@ -3976,11 +3996,12 @@ fn render_single(
     plain: bool,
     width: Option<usize>,
     redact: bool,
+    min_severity: &diff::Severity,
 ) -> Result<String> {
     // JSON carries the severity as a field rather than as a marker glyph, and
     // the GitHub Actions workflow-command syntax is already plain ASCII, so
     // `--ascii`/`--plain` only affect the human-readable formats. `width` is
-    // narrower still: it only ever reaches `to_text_with_width`
+    // narrower still: it only ever reaches `to_text_with_min_severity`
     // below, so JSON and Markdown output are structurally incapable of being
     // affected by it.
     let mut renderable = report.to_renderable();
@@ -3994,7 +4015,7 @@ fn render_single(
             Ok(destyle_text(markdown, ascii, plain))
         }
         OutputFormat::Text => {
-            let text = renderable.to_text_with_width(explain, width);
+            let text = renderable.to_text_with_min_severity(explain, width, min_severity);
             Ok(destyle_text(text, ascii, plain))
         }
         OutputFormat::GithubActions => Ok(render_github_actions(report)),

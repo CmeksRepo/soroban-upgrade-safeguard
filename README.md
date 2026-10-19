@@ -744,6 +744,18 @@ machine-readable report — with `--format json` it is written to stderr instead
 `--quiet` goes further and silences it on both streams, which is what you want
 when a CI log should contain the report and nothing else.
 
+### Minimum severity
+
+Use `--min-severity info|warning|critical` to filter findings in text reports.
+The default is `info`, which displays every finding. Summary counts, verdicts,
+and exit codes always reflect the complete analysis, even when findings are
+hidden. JSON, Markdown, and GitHub Actions output retain the full report.
+This also applies to text reports in batch mode and text report files.
+
+```bash
+soroban-upgrade-safeguard ./wasm/v1.wasm ./wasm/v2.wasm --min-severity critical
+```
+
 ### Diagnostic logging
 
 Use `-v` / `--verbose` for decoded spec-entry and host-import counts, finding
