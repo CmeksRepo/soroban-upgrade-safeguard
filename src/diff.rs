@@ -17,7 +17,7 @@ use stellar_xdr::curr::{
 ///
 /// `Deserialize` is derived so a previously emitted JSON report can be read
 /// back and re-rendered (see [`crate::render`]).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Critical,

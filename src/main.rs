@@ -246,6 +246,24 @@ fn load_suppressions(
     Ok((SuppressionConfig::default(), None))
 }
 
+/// CLI values kept separate from the shared report severity type.
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum MinimumSeverity {
+    Info,
+    Warning,
+    Critical,
+}
+
+impl MinimumSeverity {
+    fn as_severity(&self) -> &diff::Severity {
+        match self {
+            Self::Info => &diff::Severity::Info,
+            Self::Warning => &diff::Severity::Warning,
+            Self::Critical => &diff::Severity::Critical,
+        }
+    }
+}
+
 /// Output format for the safety report.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum OutputFormat {
@@ -471,7 +489,7 @@ struct Args {
 
     /// Minimum severity of displayed text findings; counts and exit codes remain unchanged.
     #[arg(long, value_enum, default_value = "info")]
-    min_severity: diff::Severity,
+    min_severity: MinimumSeverity,
 
     /// Output specification(s) in FORMAT:PATH format (e.g. json:report.json),
     /// or a bare path whose format comes from --format. Can be repeated.
@@ -2432,7 +2450,7 @@ fn run_batch(args: &Args, outputs: &[OutputSpec], progress: &dyn Fn(String)) -> 
                 args.plain,
                 width,
                 args.redact_paths,
-                &args.min_severity,
+                args.min_severity.as_severity(),
             )?;
             write_report_file(
                 output_dir,
@@ -2497,7 +2515,7 @@ fn run_batch(args: &Args, outputs: &[OutputSpec], progress: &dyn Fn(String)) -> 
         },
         outputs,
         progress,
-        &args.min_severity,
+        args.min_severity.as_severity(),
     )?;
 
     if !overall_safe {
@@ -2917,7 +2935,7 @@ fn render_pair_outputs(
         args.redact_paths,
         Some(&pair.name),
         progress,
-        &args.min_severity,
+        args.min_severity.as_severity(),
     )?;
 
     if let Some(output_dir) = args.per_contract_output_dir.as_deref() {
@@ -2929,7 +2947,7 @@ fn render_pair_outputs(
             plain,
             width,
             args.redact_paths,
-            &args.min_severity,
+            args.min_severity.as_severity(),
         )?;
         write_report_file(
             output_dir,
@@ -3088,7 +3106,7 @@ fn render_gap_outputs(
         args.redact_paths,
         Some(gap_name),
         progress,
-        &args.min_severity,
+        args.min_severity.as_severity(),
     )?;
 
     if let Some(output_dir) = args.per_contract_output_dir.as_deref() {
@@ -3100,7 +3118,7 @@ fn render_gap_outputs(
             args.plain,
             width,
             args.redact_paths,
-            &args.min_severity,
+            args.min_severity.as_severity(),
         )?;
         write_report_file(
             output_dir,
@@ -3762,7 +3780,7 @@ fn run_single(
             args.redact_paths,
             None,
             progress,
-            &args.min_severity,
+            args.min_severity.as_severity(),
         )?;
         log.timing("Rendering report", render_start);
         log.timing("Comparison cycle", cycle_start);
