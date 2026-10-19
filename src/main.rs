@@ -371,6 +371,10 @@ enum RenderFormat {
     Text,
     /// Markdown document suitable for PR descriptions and comments.
     Markdown,
+    /// GitHub Actions workflow annotations (`::error::`, `::warning::`,
+    /// `::notice::`). Reuses the same renderer as `--format github-actions`
+    /// on the main comparison command.
+    GithubActions,
 }
 
 #[derive(Parser, Debug)]
@@ -1712,6 +1716,11 @@ fn run_render(args: &RenderArgs) -> Result<()> {
                     markdown
                 }
             );
+        }
+        RenderFormat::GithubActions => {
+            // Disable color: annotations must not contain ANSI escape codes.
+            colored::control::set_override(false);
+            print!("{}", report.to_github_actions());
         }
     }
 
