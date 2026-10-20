@@ -1215,6 +1215,10 @@ struct RenderArgs {
     #[arg(long, value_enum, ignore_case = true, default_value_t = RenderFormat::Text)]
     format: RenderFormat,
 
+    /// Write the rendered report atomically to this path instead of stdout.
+    #[arg(long, value_name = "PATH")]
+    output: Option<PathBuf>,
+
     /// Print the remediation guidance stored in the report, if it has any.
     #[arg(long)]
     explain: bool,
@@ -2523,35 +2527,37 @@ fn run_render(args: &RenderArgs) -> Result<()> {
         )
     })?;
 
-    match args.format {
+    let rendered = match args.format {
         RenderFormat::Text => {
             let width = resolve_text_width(args.width, std::io::stdout().is_terminal());
             let text = report.to_text_with_width(args.explain, width);
-            println!(
-                "{}",
-                if args.plain {
-                    report::plainify(&text)
-                } else {
-                    text
-                }
-            );
+            let text = if args.plain {
+                report::plainify(&text)
+            } else {
+                text
+            };
+            format!("{text}\n")
         }
         RenderFormat::Markdown => {
             let markdown = report.to_markdown();
-            println!(
-                "{}",
-                if args.plain {
-                    report::plainify(&markdown)
-                } else {
-                    markdown
-                }
-            );
+            let markdown = if args.plain {
+                report::plainify(&markdown)
+            } else {
+                markdown
+            };
+            format!("{markdown}\n")
         }
         RenderFormat::GithubActions => {
             // Disable color: annotations must not contain ANSI escape codes.
             colored::control::set_override(false);
-            print!("{}", report.to_github_actions());
+            report.to_github_actions()
         }
+    };
+
+    match &args.output {
+        Some(path) => write_atomically(path, rendered.as_bytes())
+            .with_context(|| format!("Failed to write rendered report to '{}'", path.display()))?,
+        None => print!("{rendered}"),
     }
 
     if !report.is_safe {
