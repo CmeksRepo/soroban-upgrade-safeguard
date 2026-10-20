@@ -1316,6 +1316,8 @@ enum CategoriesFormat {
     Text,
     /// Machine-readable JSON array, one object per category.
     Json,
+    /// Markdown table for documentation and pull requests.
+    Markdown,
 }
 
 /// `categories`: list every finding category with its default severity,
@@ -1329,6 +1331,7 @@ struct CategoriesArgs {
     /// Output format.
     #[arg(long, value_enum, ignore_case = true, default_value_t = CategoriesFormat::Text)]
     format: CategoriesFormat,
+
 
     /// Do not color output.
     #[arg(long)]
@@ -1676,7 +1679,7 @@ fn wrap_with_prefix(prefix: &str, text: &str, width: usize) -> String {
 }
 
 /// `categories`: list every finding category with its default severity and
-/// remediation guidance, in `--format` `text` or `json`. Both formats are
+/// remediation guidance, in `--format` `text`, `json`, or `markdown`. All formats are
 /// generated from [`category::FindingCategory::all()`] — the single source of
 /// truth the analysis uses to classify findings — so the listing cannot drift
 /// from the categories the tool actually emits.
@@ -1690,9 +1693,11 @@ fn run_categories(args: &CategoriesArgs) -> Result<()> {
         colored::control::set_override(false);
     }
 
+    let categories = category::FindingCategory::all().to_vec();
+
     match args.format {
         CategoriesFormat::Json => {
-            let entries: Vec<serde_json::Value> = category::FindingCategory::all()
+            let entries: Vec<serde_json::Value> = categories
                 .iter()
                 .map(|c| {
                     serde_json::json!({
@@ -1705,7 +1710,8 @@ fn run_categories(args: &CategoriesArgs) -> Result<()> {
                 .collect();
             println!("{}", serde_json::to_string_pretty(&entries)?);
         }
-        CategoriesFormat::Text => print!("{}", render_categories_text()),
+        CategoriesFormat::Text => print!("{}", render_categories_text(&categories)),
+        CategoriesFormat::Markdown => print!("{}", render_categories_markdown(&categories)),
     }
     Ok(())
 }
@@ -1859,14 +1865,42 @@ fn run_doctor(args: &DoctorArgs) -> Result<()> {
     Ok(())
 }
 
-fn render_categories_text() -> String {
+fn markdown_table_cell(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\\', "&#92;")
+        .replace('`', "&#96;")
+        .replace('|', "&#124;")
+        .replace('\r', "")
+        .replace('\n', "<br>")
+}
+
+fn render_categories_markdown(categories: &[category::FindingCategory]) -> String {
+    let mut out = String::from(
+        "| Category | Severity | Trigger | Remediation |\n\
+         | --- | --- | --- | --- |\n",
+    );
+    for cat in categories {
+        out.push_str(&format!(
+            "| {} | {:?} | {} | {} |\n",
+            markdown_table_cell(cat.as_str()),
+            cat.severity(),
+            markdown_table_cell(cat.trigger_description()),
+            markdown_table_cell(cat.remediation()),
+        ));
+    }
+    out
+}
+
+fn render_categories_text(categories: &[category::FindingCategory]) -> String {
     const WIDTH: usize = 80;
     let mut out = String::new();
-    out.push_str("Every finding category, with its default severity, what triggers it, and\n");
+    out.push_str("Finding categories, with their default severity, what triggers them, and\n");
     out.push_str("remediation guidance. See docs/finding-categories.md for the full reference.\n");
 
     let mut first = true;
-    for cat in category::FindingCategory::all() {
+    for cat in categories {
         if !first {
             out.push('\n');
         }
