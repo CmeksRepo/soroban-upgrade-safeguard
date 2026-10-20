@@ -219,3 +219,67 @@ fn categories_help_lists_markdown() {
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("markdown"));
 }
+
+#[test]
+fn severity_filters_all_formats_by_exact_default_severity() {
+    for severity in [Severity::Critical, Severity::Warning, Severity::Info] {
+        let label = severity_json(severity.clone());
+        let expected: Vec<_> = FindingCategory::all()
+            .iter()
+            .filter(|cat| cat.severity() == severity)
+            .collect();
+        assert!(!expected.is_empty());
+
+        let output = categories(&["--severity", label, "--format", "json"]);
+        assert!(output.status.success());
+        let entries: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(entries.len(), expected.len());
+        for (entry, cat) in entries.iter().zip(&expected) {
+            assert_eq!(entry["category"].as_str(), Some(cat.as_str()));
+            assert_eq!(entry["severity"].as_str(), Some(label));
+        }
+
+        for format in ["text", "markdown"] {
+            let output = categories(&["--severity", label, "--format", format]);
+            assert!(output.status.success());
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            for cat in FindingCategory::all() {
+                let present = if format == "text" {
+                    stdout.lines().any(|line| line == cat.as_str())
+                } else {
+                    stdout
+                        .lines()
+                        .any(|line| line.starts_with(&format!("| {} |", cat.as_str())))
+                };
+                assert_eq!(
+                    present,
+                    cat.severity() == severity,
+                    "{format}: {}",
+                    cat.as_str()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn invalid_severity_lists_possible_values() {
+    let output = categories(&["--severity", "high"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("possible values"));
+    for value in ["critical", "warning", "info"] {
+        assert!(stderr.contains(value), "{stderr}");
+    }
+}
+
+#[test]
+fn categories_help_documents_severity() {
+    let output = categories(&["--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--severity <SEVERITY>"));
+    for value in ["critical", "warning", "info"] {
+        assert!(stdout.contains(value), "{stdout}");
+    }
+}

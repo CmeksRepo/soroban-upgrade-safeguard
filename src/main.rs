@@ -1332,6 +1332,9 @@ struct CategoriesArgs {
     #[arg(long, value_enum, ignore_case = true, default_value_t = CategoriesFormat::Text)]
     format: CategoriesFormat,
 
+    /// List only categories with this exact default severity.
+    #[arg(long, value_enum, ignore_case = true, value_name = "SEVERITY")]
+    severity: Option<MinimumSeverity>,
 
     /// Do not color output.
     #[arg(long)]
@@ -1693,7 +1696,15 @@ fn run_categories(args: &CategoriesArgs) -> Result<()> {
         colored::control::set_override(false);
     }
 
-    let categories = category::FindingCategory::all().to_vec();
+    let categories: Vec<_> = category::FindingCategory::all()
+        .iter()
+        .copied()
+        .filter(|cat| {
+            args.severity
+                .as_ref()
+                .map_or(true, |severity| &cat.severity() == severity.as_severity())
+        })
+        .collect();
 
     match args.format {
         CategoriesFormat::Json => {
