@@ -1256,9 +1256,13 @@ struct UpgradeReportArgs {
 /// `init`: generate a suppression config from current findings.
 #[derive(ClapArgs, Debug)]
 struct InitArgs {
-    /// Overwrite existing .safeguard.toml if it exists
+    /// Overwrite the selected config file if it exists
     #[arg(long)]
     force: bool,
+
+    /// Destination path for the generated config.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_CONFIG_FILE)]
+    output: PathBuf,
 
     /// Path to the old WASM file (or contract ID with --rpc-url)
     #[arg(value_name = "OLD")]
@@ -2623,7 +2627,7 @@ fn run_init(args: &InitArgs) -> Result<()> {
     use std::fs;
     use std::io::Write;
 
-    let config_path = Path::new(DEFAULT_CONFIG_FILE);
+    let config_path = &args.output;
 
     // Check if config already exists
     if config_path.exists() && !args.force {
